@@ -1,56 +1,55 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>MySight</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MySight — Your phone, your eyes</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div class="app">
+<main class="app">
+  <section id="startScreen" aria-label="Start MySight">
+    <div class="brand">MySight</div>
+    <h1>Your phone.<br>Your eyes.</h1>
+    <p>Point the camera. Ask naturally. MySight describes what matters, reads signs and warns you about obstacles.</p>
+    <button id="startBtn" aria-label="Start MySight">START</button>
+    <div class="start-note">Camera + microphone are needed.</div>
+  </section>
 
-  <div id="startScreen">
-    <h1>MySight</h1>
-    <p>Tap the button, then just talk. MySight will ask where you want to go and guide you there by voice.</p>
-    <button id="startBtn" aria-label="Start MySight">Start</button>
-    <div class="hint">One tap. Camera and microphone permission will be requested.</div>
-    <a href="diagnostics.html" style="color:#8b92a0; font-size:12px;">Having trouble? Run diagnostics</a>
-  </div>
-
-  <div id="mainScreen">
+  <section id="mainScreen" aria-label="MySight camera">
     <div class="camera-wrap" id="cameraWrap">
       <video id="video" autoplay playsinline muted></video>
-      <canvas class="overlay" id="overlay"></canvas>
+      <canvas id="overlay" class="overlay"></canvas>
 
-      <div class="top-bar">
+      <div class="top-bar" aria-hidden="true">
         <span class="pill safe" id="safetyPill"><span class="dot"></span><span>Path clear</span></span>
-        <span class="pill" id="listenPill"><span class="dot"></span><span>Idle</span></span>
+        <span class="pill" id="listenPill"><span class="dot"></span><span>Ready</span></span>
       </div>
 
-      <button class="transcript-toggle" id="transcriptToggleBtn">Transcript</button>
-      <button class="speak-btn" id="speakBtn" aria-label="Speak a destination">🎙</button>
+      <div class="center-help" aria-hidden="true">
+        <span>Point camera</span>
+      </div>
+
+      <button class="speak-btn" id="speakBtn" aria-label="Speak to MySight">🎙</button>
+      <button class="transcript-toggle" id="transcriptToggleBtn" aria-label="Open transcript">Transcript</button>
 
       <div class="caption-bar">
-        <div class="current" id="currentCaption">Say "Start" was tapped. Getting ready…</div>
+        <div class="current" id="currentCaption">Ready. Tap the microphone and ask me anything.</div>
       </div>
 
       <div id="transcriptPanel">
-        <button class="close-transcript" id="closeTranscriptBtn" aria-label="Close transcript">✕</button>
-        <h2>Full transcript</h2>
+        <button class="close-transcript" id="closeTranscriptBtn" aria-label="Close transcript">×</button>
+        <h2>What MySight heard</h2>
         <div id="logList"></div>
       </div>
     </div>
-  </div>
-
-  <div aria-live="polite" class="visually-hidden" id="ariaLive"></div>
-</div>
+  </section>
+  <div id="ariaLive" class="visually-hidden" aria-live="assertive"></div>
+</main>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
-
 <script src="js/app.js"></script>
 </body>
 </html>
