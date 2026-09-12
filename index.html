@@ -299,6 +299,40 @@
     }
   }
 
+  // The 80 classes the object-detection model actually knows. Anything not in
+  // this list (e.g. "door") cannot be found by sight and falls back to
+  // looking for it as printed text on a sign instead.
+  const OBJECT_CLASSES = [
+    'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+    'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
+    'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
+    'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
+    'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+    'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
+    'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair',
+    'couch','potted plant','bed','dining table','toilet','tv','laptop','mouse',
+    'remote','keyboard','cell phone','microwave','oven','toaster','sink',
+    'refrigerator','book','clock','vase','scissors','teddy bear','hair drier',
+    'toothbrush'
+  ];
+
+  function matchObjectClass(phrase){
+    const p = phrase.toLowerCase().replace(/s$/, ''); // crude singularize
+    let best = null;
+    OBJECT_CLASSES.forEach(cls => {
+      const clsSingular = cls.replace(/s$/, '');
+      if (p === cls || p === clsSingular || p.includes(cls) || cls.includes(p)) {
+        if (!best || cls.length > best.length) best = cls;
+      }
+    });
+    return best;
+  }
+
+  let searchMode = null;      // 'object' | 'sign'
+  let objectTarget = null;
+  let lastObjectAnnounceAt = 0;
+  let objectWasVisible = false;
+
   // ---------- Camera + detection ----------
   async function startCamera(){
     stream = await navigator.mediaDevices.getUserMedia({
@@ -334,12 +368,14 @@
       ctx.clearRect(0,0,overlay.width, overlay.height);
       const w = overlay.width, h = overlay.height;
       let hazard = null;
+      let targetHit = null;
 
       predictions.forEach(p => {
         const [x,y,bw,bh] = p.bbox;
         const isHazard = HAZARD_CLASSES.has(p.class);
-        ctx.strokeStyle = isHazard ? '#ff5a5f' : '#4fd1c5';
-        ctx.lineWidth = 2;
+        const isTarget = searchMode === 'object' && objectTarget && p.class === objectTarget;
+        ctx.strokeStyle = isTarget ? '#ffb13d' : (isHazard ? '#ff5a5f' : '#4fd1c5');
+        ctx.lineWidth = isTarget ? 3 : 2;
         ctx.strokeRect(x,y,bw,bh);
         if (isHazard) {
           const cy = y + bh/2;
@@ -348,6 +384,9 @@
           if (inLowerPath && closeEnough) {
             if (!hazard || (bw*bh) > (hazard.bbox[2]*hazard.bbox[3])) hazard = p;
           }
+        }
+        if (isTarget) {
+          if (!targetHit || (bw*bh) > (targetHit.bbox[2]*targetHit.bbox[3])) targetHit = p;
         }
       });
 
@@ -364,8 +403,28 @@
       } else {
         setSafety(false);
       }
+
+      if (searchMode === 'object' && objectTarget) {
+        if (targetHit) {
+          const [x,,bw,bh] = targetHit.bbox;
+          const cx = x + bw/2;
+          const third = w / 3;
+          const pos = cx < third ? 'to your left' : cx > third*2 ? 'to your right' : 'straight ahead';
+          const closeness = (bw*bh) > (w*h*0.15) ? 'close by' : 'ahead';
+          const now = Date.now();
+          if (!objectWasVisible || now - lastObjectAnnounceAt > 4500) {
+            speak(capitalize(objectTarget) + ' spotted, ' + pos + ', ' + closeness + '.', 'sign');
+            lastObjectAnnounceAt = now;
+          }
+          objectWasVisible = true;
+        } else {
+          objectWasVisible = false;
+        }
+      }
     }, 700);
   }
+
+  function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
 
   async function scanForSign(){
     if (!video.videoWidth || !destination || speaking) return;
@@ -383,12 +442,26 @@
 
   function startSignSearch(dest){
     destination = dest;
+    searchMode = 'sign';
+    objectTarget = null;
     if (signScanLoopId) clearInterval(signScanLoopId);
     scanForSign();
     signScanLoopId = setInterval(scanForSign, 4000);
   }
 
+  function startObjectSearch(cls){
+    objectTarget = cls;
+    searchMode = 'object';
+    objectWasVisible = false;
+    lastObjectAnnounceAt = 0;
+    if (signScanLoopId) { clearInterval(signScanLoopId); signScanLoopId = null; }
+    destination = '';
+  }
+
   // ---------- Voice input ----------
+  let manualListenRequested = false;
+  let backgroundListenTimer = null;
+
   function initRecognition(){
     if (!hasSpeechRecognition) return;
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -405,18 +478,28 @@
     recognition.onerror = (e) => {
       recognitionActive = false;
       setListenState('idle');
-      if (e.error === 'no-speech') {
-        speak('I didn\'t catch that. Tap the microphone and tell me where you want to go.', 'system');
+      // Only complain out loud if the user explicitly tapped the mic —
+      // silent background listening attempts should fail quietly.
+      if (e.error === 'no-speech' && manualListenRequested) {
+        speak('I didn\'t catch that. Try again, or just wait \u2014 I\'ll keep listening.', 'system');
       }
+      manualListenRequested = false;
     };
     recognition.onend = () => {
       recognitionActive = false;
       setListenState('idle');
     };
+
+    // Keep trying to listen in the background every few seconds so the
+    // user never has to tap the mic for a normal follow-up question.
+    backgroundListenTimer = setInterval(() => {
+      if (!recognitionActive && !speaking) startRecognition(false);
+    }, 3500);
   }
 
-  function startRecognition(){
+  function startRecognition(isManual){
     if (!recognition || recognitionActive || speaking) return;
+    manualListenRequested = !!isManual;
     try {
       recognition.start();
       recognitionActive = true;
@@ -431,37 +514,41 @@
     recognitionActive = false;
   }
 
-  function extractDestination(phrase){
+  function extractQuery(phrase){
     let p = phrase.toLowerCase();
-    p = p.replace(/^(find|go to|take me to|navigate to|i want to go to|i need to find)\s+/i, '');
-    p = p.replace(/^the\s+/i, '');
+    p = p.replace(/^(find|go to|take me to|navigate to|where is|where's|i want to go to|i need to find)\s+/i, '');
+    p = p.replace(/^(the|a|an)\s+/i, '');
     return p.trim().replace(/[.?!]+$/, '');
   }
 
   function handleVoiceInput(heard){
-    const dest = extractDestination(heard);
-    if (!dest) {
-      speak('Sorry, I didn\'t get a destination. Tap the microphone and try again.', 'system');
+    const q = extractQuery(heard);
+    if (!q) {
+      speak('Sorry, I didn\'t catch a destination. Try again.', 'system');
       return;
     }
-    const cap = dest.charAt(0).toUpperCase() + dest.slice(1);
-    startSignSearch(cap);
-    speak('Looking for ' + cap + '. I\'ll tell you when I see it, and warn you about anything in your path.', 'system', () => {
-      // resume listening for a possible new destination later, idle otherwise
-    });
+    const objClass = matchObjectClass(q);
+    if (objClass) {
+      startObjectSearch(objClass);
+      speak('Looking for the ' + objClass + '. I\'ll tell you when I spot it and which way it is.', 'system');
+    } else {
+      const cap = capitalize(q);
+      startSignSearch(cap);
+      speak('I can\'t visually recognize "' + q + '" as an object, but I\'ll watch for a sign that says ' + cap + '.', 'system');
+    }
   }
 
   function askForDestination(){
-    speak('Where do you want to go?', 'system', () => {
-      startRecognition();
+    speak('Where do you want to go, or what are you looking for?', 'system', () => {
+      startRecognition(true);
     });
   }
 
   // ---------- Wiring ----------
   speakBtn.addEventListener('click', () => {
     if (recognitionActive) { stopRecognition(); return; }
-    if (speaking) return;
-    startRecognition();
+    if (speaking) { window.speechSynthesis.cancel(); speaking = false; }
+    startRecognition(true);
   });
 
   transcriptToggleBtn.addEventListener('click', () => transcriptPanel.classList.add('open'));
