@@ -19,13 +19,13 @@
   const logList = $('logList');
   const ariaLive = $('ariaLive');
 
-  const HAZARD_CLASSES = new Set([
-    'person', 'chair', 'couch', 'bench', 'dining table', 'suitcase', 'backpack',
-    'bicycle', 'motorcycle', 'car', 'potted plant', 'umbrella', 'handbag',
-    'skateboard', 'fire hydrant', 'stop sign'
+  const HAZARDS = new Set([
+    'person','chair','couch','bench','dining table','suitcase','backpack',
+    'bicycle','motorcycle','car','potted plant','umbrella','handbag',
+    'skateboard','fire hydrant','stop sign'
   ]);
 
-  const OBJECT_CLASSES = [
+  const OBJECTS = [
     'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
     'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
     'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
@@ -35,407 +35,320 @@
     'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair',
     'couch','potted plant','bed','dining table','toilet','tv','laptop','mouse',
     'remote','keyboard','cell phone','microwave','oven','toaster','sink',
-    'refrigerator','book','clock','vase','scissors','teddy bear','hair drier',
-    'toothbrush'
+    'refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush'
   ];
 
-  let model = null;
+  const hasRecognition = 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
+  const hasSynthesis = 'speechSynthesis' in window;
+
   let stream = null;
+  let model = null;
+  let recognition = null;
+  let recognitionActive = false;
+  let appStarted = false;
+  let speaking = false;
+  let speechGeneration = 0;
+  let voicesReady = false;
   let searchMode = null;
   let destination = '';
   let objectTarget = null;
-  let obstacleLoopId = null;
-  let signScanLoopId = null;
-  let recognition = null;
-  let recognitionActive = false;
-  let speaking = false;
-  let appStarted = false;
-  let voicesReady = false;
-  let signScanBusy = false;
-  let lastSignText = '';
-  let lastSignSpokenAt = 0;
-  let lastSafetySpokenAt = 0;
-  let lastObjectAnnounceAt = 0;
-  let objectWasVisible = false;
-  let backgroundRestartTimer = null;
-  let speechWatchdog = null;
+  let objectVisible = false;
+  let lastObjectAnnouncement = 0;
+  let lastSafetyAnnouncement = 0;
+  let lastSignEvidence = '';
+  let lastSignAnnouncement = 0;
+  let signBusy = false;
+  let backgroundTimer = null;
+  let detectionTimer = null;
+  let ocrTimer = null;
 
-  const hasSpeechRecognition = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
-  const hasSpeechSynthesis = 'speechSynthesis' in window;
+  const PRIORITY = { system: 1, navigation: 2, sign: 3, safety: 4 };
+  let activePriority = 0;
 
-  // Speech is a priority system, not a collection of competing timers.
-  // Safety can interrupt navigation; ordinary messages are dropped if a higher
-  // priority message is already speaking.
-  const SPEECH_PRIORITY = { system: 1, navigation: 2, sign: 3, safety: 4 };
-  let activeSpeechPriority = 0;
-  let activeUtterance = null;
-
-  function log(text, kind) {
+  function log(text, kind = 'system') {
     currentCaption.textContent = text;
-    currentCaption.className = 'current ' + (kind || 'system');
+    currentCaption.className = 'current ' + kind;
     ariaLive.textContent = text;
-
     const row = document.createElement('div');
-    row.className = 'log-entry ' + (kind || 'system');
+    row.className = 'log-entry ' + kind;
     const time = document.createElement('span');
     time.className = 'time';
-    time.textContent = new Date().toLocaleTimeString([], {
-      hour: '2-digit', minute: '2-digit', second: '2-digit'
-    });
+    time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const txt = document.createElement('span');
     txt.className = 'text';
     txt.textContent = text;
-    row.appendChild(time);
-    row.appendChild(txt);
+    row.append(time, txt);
     logList.appendChild(row);
     logList.scrollTop = logList.scrollHeight;
   }
 
-  function setListenState(state) {
+  function setListen(state) {
     listenPill.className = 'pill' + (state === 'listening' ? ' listening' : '');
     listenPill.querySelector('span:last-child').textContent =
       state === 'listening' ? 'Listening…' : state === 'thinking' ? 'Thinking…' : 'Idle';
     speakBtn.classList.toggle('listening', state === 'listening');
   }
 
-  function capitalize(s) {
-    return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  function normalize(text) {
+    return String(text || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
-  function primeSpeech() {
-    if (!hasSpeechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const warm = new SpeechSynthesisUtterance(' ');
-    warm.volume = 0;
-    window.speechSynthesis.speak(warm);
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length) voicesReady = true;
-    window.speechSynthesis.onvoiceschanged = () => { voicesReady = true; };
+  function capitalize(text) {
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+  }
 
-    if (!speechWatchdog) {
-      speechWatchdog = setInterval(() => {
-        if (window.speechSynthesis.speaking) {
-          window.speechSynthesis.pause();
-          window.speechSynthesis.resume();
-        }
-      }, 8000);
-    }
+  function prepareSpeech() {
+    if (!hasSynthesis) return;
+    window.speechSynthesis.cancel();
+    const voices = window.speechSynthesis.getVoices();
+    voicesReady = voices.length > 0;
+    window.speechSynthesis.onvoiceschanged = () => { voicesReady = true; };
   }
 
   function cancelSpeech() {
-    if (hasSpeechSynthesis) window.speechSynthesis.cancel();
+    speechGeneration++;
+    if (hasSynthesis) window.speechSynthesis.cancel();
     speaking = false;
-    activeSpeechPriority = 0;
-    activeUtterance = null;
+    activePriority = 0;
+    scheduleBackgroundListening(400);
   }
 
-  function speak(text, kind, onDone) {
-    const priority = SPEECH_PRIORITY[kind] || 1;
+  function speak(text, kind = 'system', done) {
     log(text, kind);
-
-    if (!hasSpeechSynthesis) {
-      if (onDone) onDone();
+    if (!hasSynthesis) {
+      if (done) done();
+      scheduleBackgroundListening(400);
       return;
     }
 
-    // Never let low-priority narration interrupt a safety warning.
-    if (speaking && priority < activeSpeechPriority) return;
+    const priority = PRIORITY[kind] || 1;
+    if (speaking && priority < activePriority) return;
 
-    if (speaking && priority >= activeSpeechPriority) {
-      window.speechSynthesis.cancel();
-      speaking = false;
-      activeSpeechPriority = 0;
-    }
+    speechGeneration++;
+    const generation = speechGeneration;
+    window.speechSynthesis.cancel();
+    speaking = false;
+    activePriority = 0;
 
     const start = () => {
-      if (!appStarted) return;
+      if (!appStarted || generation !== speechGeneration) return;
       stopRecognition();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.volume = 1;
       speaking = true;
-      activeSpeechPriority = priority;
-
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.rate = 1.02;
-      utter.volume = 1;
-      activeUtterance = utter;
+      activePriority = priority;
       let finished = false;
 
       const finish = () => {
-        if (finished) return;
+        if (finished || generation !== speechGeneration) return;
         finished = true;
         speaking = false;
-        activeSpeechPriority = 0;
-        activeUtterance = null;
-        if (onDone) onDone();
+        activePriority = 0;
+        if (done) done();
+        scheduleBackgroundListening(500);
       };
 
-      utter.onend = finish;
-      utter.onerror = finish;
-      setTimeout(finish, Math.max(2500, text.length * 95 + 2500));
-      window.speechSynthesis.speak(utter);
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      window.speechSynthesis.speak(utterance);
+      setTimeout(finish, Math.max(3500, text.length * 110 + 2000));
     };
 
-    if (!voicesReady) {
-      setTimeout(() => {
-        voicesReady = true;
-        start();
-      }, 200);
-    } else {
-      start();
-    }
+    if (voicesReady) start();
+    else setTimeout(() => { voicesReady = true; start(); }, 250);
   }
 
-  function setSafety(state, detail) {
-    if (state === 'warning') {
-      safetyPill.className = 'pill';
-      safetyPill.querySelector('span:last-child').textContent = detail || 'Obstacle ahead';
-      safetyPill.querySelector('.dot').style.background = 'var(--safety)';
-      cameraWrap.classList.add('alert');
-    } else if (state === 'blocked') {
-      safetyPill.className = 'pill';
-      safetyPill.querySelector('span:last-child').textContent = 'Path blocked';
-      safetyPill.querySelector('.dot').style.background = 'var(--safety)';
-      cameraWrap.classList.add('alert');
-    } else {
+  function setSafety(state, text) {
+    const dot = safetyPill.querySelector('.dot');
+    if (state === 'clear') {
       safetyPill.className = 'pill safe';
       safetyPill.querySelector('span:last-child').textContent = 'Path clear';
-      safetyPill.querySelector('.dot').style.background = '';
+      dot.style.background = '';
       cameraWrap.classList.remove('alert');
+    } else {
+      safetyPill.className = 'pill';
+      safetyPill.querySelector('span:last-child').textContent = text || 'Obstacle ahead';
+      dot.style.background = 'var(--safety)';
+      cameraWrap.classList.add('alert');
     }
   }
 
   function resizeOverlay() {
-    if (!video.videoWidth && !video.clientWidth) return;
-    overlay.width = video.videoWidth || video.clientWidth;
-    overlay.height = video.videoHeight || video.clientHeight;
+    if (!video.videoWidth) return;
+    overlay.width = video.videoWidth;
+    overlay.height = video.videoHeight;
   }
 
-  async function startCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error('Camera API is unavailable');
-    }
-
-    stream = await navigator.mediaDevices.getUserMedia({
+  async function openCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API is unavailable. Use HTTPS or localhost.');
+    const constraints = {
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
       audio: false
-    });
+    };
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (firstError) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
     video.srcObject = stream;
     await video.play();
     resizeOverlay();
+    video.addEventListener('loadedmetadata', resizeOverlay, { once: true });
     window.addEventListener('resize', resizeOverlay);
-
-    cocoSsd.load({ base: 'lite_mobilenet_v2' }).then((m) => {
-      model = m;
-      log('Obstacle and object detection ready.', 'system');
-      startObstacleLoop();
-    }).catch((e) => {
-      log('Obstacle model failed to load: ' + e.message, 'system');
-    });
   }
 
-  function matchObjectClass(phrase) {
-    const p = phrase.toLowerCase().trim().replace(/\s+/g, ' ');
+  async function loadModel() {
+    if (!window.cocoSsd) throw new Error('COCO-SSD library did not load. Check your internet connection.');
+    try {
+      model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    } catch (e) {
+      log('AI model load failed. Retrying…', 'system');
+      model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    }
+    log('Camera and object detection ready.', 'system');
+  }
+
+  function matchObject(phrase) {
+    const p = normalize(phrase);
     let best = null;
-    for (const cls of OBJECT_CLASSES) {
-      if (p === cls || p === cls + 's' || p.includes(cls) || cls.includes(p)) {
+    for (const cls of OBJECTS) {
+      if (p === cls || p === cls + 's' || p.includes(cls)) {
         if (!best || cls.length > best.length) best = cls;
       }
     }
     return best;
   }
 
-  function getHorizontalPosition(box, width) {
+  function horizontal(box, width) {
     const cx = box[0] + box[2] / 2;
-    if (cx < width * 0.34) return 'left';
-    if (cx > width * 0.66) return 'right';
-    return 'center';
+    return cx < width * 0.34 ? 'left' : cx > width * 0.66 ? 'right' : 'center';
   }
 
-  function detectPathState(predictions, w, h) {
-    let centerHazard = null;
-    let leftBlocked = false;
-    let rightBlocked = false;
+  function pathState(predictions, w, h) {
+    let center = null;
+    let left = false;
+    let right = false;
+    for (const p of predictions) {
+      if (!HAZARDS.has(p.class) || p.score < 0.5) continue;
+      const [x, y, bw, bh] = p.bbox;
+      const area = (bw * bh) / (w * h);
+      const bottom = (y + bh) / h;
+      if (area < 0.025 || bottom < 0.60) continue;
+      const cx = x + bw / 2;
+      if (cx < w * 0.44) left = true;
+      if (cx > w * 0.56) right = true;
+      if (cx >= w * 0.30 && cx <= w * 0.70 && (!center || area > center.area)) center = { p, area };
+    }
+    return { center, left, right };
+  }
+
+  function safeDirection(state, w) {
+    if (state.left && state.right) return null;
+    if (state.left) return 'right';
+    if (state.right) return 'left';
+    const [x, , bw] = state.center.p.bbox;
+    return x + bw / 2 < w / 2 ? 'right' : 'left';
+  }
+
+  async function detect() {
+    if (!model || !appStarted || !video.videoWidth) return;
+    let predictions = [];
+    try { predictions = await model.detect(video, 12, 0.5); } catch { return; }
+    resizeOverlay();
+    const w = overlay.width;
+    const h = overlay.height;
+    ctx.clearRect(0, 0, w, h);
+    let target = null;
 
     for (const p of predictions) {
-      if (!HAZARD_CLASSES.has(p.class) || p.score < 0.45) continue;
       const [x, y, bw, bh] = p.bbox;
-      const areaRatio = (bw * bh) / (w * h);
-      const bottomRatio = (y + bh) / h;
-      const centerX = x + bw / 2;
-
-      // This is a conservative camera-space heuristic, not a distance sensor.
-      const relevant = bottomRatio > 0.58 && areaRatio > 0.025;
-      if (!relevant) continue;
-
-      if (centerX < w * 0.43) leftBlocked = true;
-      if (centerX > w * 0.57) rightBlocked = true;
-
-      if (centerX >= w * 0.32 && centerX <= w * 0.68) {
-        if (!centerHazard || areaRatio > centerHazard.areaRatio) {
-          centerHazard = { prediction: p, areaRatio };
-        }
-      }
+      const hazard = HAZARDS.has(p.class) && p.score >= 0.5;
+      const isTarget = searchMode === 'object' && p.class === objectTarget && p.score >= 0.5;
+      ctx.strokeStyle = isTarget ? '#ffb13d' : hazard ? '#ff5a5f' : '#4fd1c5';
+      ctx.lineWidth = isTarget ? 3 : 2;
+      ctx.strokeRect(x, y, bw, bh);
+      if (isTarget && (!target || bw * bh > target.bbox[2] * target.bbox[3])) target = p;
     }
 
-    return { centerHazard, leftBlocked, rightBlocked };
-  }
-
-  function chooseSafeDirection(leftBlocked, rightBlocked, hazard) {
-    if (leftBlocked && rightBlocked) return null;
-    if (!leftBlocked && rightBlocked) return 'left';
-    if (leftBlocked && !rightBlocked) return 'right';
-
-    // Both side regions look free. Prefer the side farther from the obstacle.
-    const [x, , bw] = hazard.bbox;
-    const cx = x + bw / 2;
-    return cx < overlay.width / 2 ? 'right' : 'left';
-  }
-
-  function startObstacleLoop() {
-    if (obstacleLoopId) return;
-
-    obstacleLoopId = setInterval(async () => {
-      if (!model || !video.videoWidth || !appStarted) return;
-
-      let predictions;
-      try {
-        predictions = await model.detect(video, 12, 0.45);
-      } catch (e) {
-        return;
-      }
-
-      resizeOverlay();
-      ctx.clearRect(0, 0, overlay.width, overlay.height);
-      const w = overlay.width;
-      const h = overlay.height;
-      let targetHit = null;
-
-      for (const p of predictions) {
-        const [x, y, bw, bh] = p.bbox;
-        const isHazard = HAZARD_CLASSES.has(p.class) && p.score >= 0.45;
-        const isTarget = searchMode === 'object' && objectTarget === p.class && p.score >= 0.45;
-        ctx.strokeStyle = isTarget ? '#ffb13d' : (isHazard ? '#ff5a5f' : '#4fd1c5');
-        ctx.lineWidth = isTarget ? 3 : 2;
-        ctx.strokeRect(x, y, bw, bh);
-
-        if (isTarget && (!targetHit || bw * bh > targetHit.bbox[2] * targetHit.bbox[3])) {
-          targetHit = p;
-        }
-      }
-
-      const path = detectPathState(predictions, w, h);
-      if (path.centerHazard) {
-        const hazard = path.centerHazard.prediction;
-        const direction = chooseSafeDirection(path.leftBlocked, path.rightBlocked, hazard);
-        const now = Date.now();
-
-        if (!direction) {
-          setSafety('blocked');
-          if (now - lastSafetySpokenAt > 3500) {
-            speak('Stop. The path ahead appears blocked.', 'safety');
-            lastSafetySpokenAt = now;
-          }
-        } else {
-          setSafety('warning', 'Obstacle ahead');
-          if (now - lastSafetySpokenAt > 3500) {
-            speak('Obstacle ahead. Move slightly ' + direction + '.', 'safety');
-            lastSafetySpokenAt = now;
-          }
+    const state = pathState(predictions, w, h);
+    const now = Date.now();
+    if (state.center) {
+      const direction = safeDirection(state, w);
+      if (!direction) {
+        setSafety('blocked', 'Path blocked');
+        if (now - lastSafetyAnnouncement > 3500) {
+          speak('Stop. The path ahead appears blocked.', 'safety');
+          lastSafetyAnnouncement = now;
         }
       } else {
-        setSafety('clear');
-      }
-
-      if (searchMode === 'object' && objectTarget) {
-        if (targetHit) {
-          const now = Date.now();
-          const pos = getHorizontalPosition(targetHit.bbox, w);
-          const areaRatio = (targetHit.bbox[2] * targetHit.bbox[3]) / (w * h);
-          const closeness = areaRatio > 0.15 ? 'close by' : 'ahead';
-          if (!objectWasVisible || now - lastObjectAnnounceAt > 5000) {
-            speak(capitalize(objectTarget) + ' spotted, ' + (pos === 'center' ? 'straight ahead' : 'to your ' + pos) + ', ' + closeness + '.', 'sign');
-            lastObjectAnnounceAt = now;
-          }
-          objectWasVisible = true;
-        } else {
-          objectWasVisible = false;
+        setSafety('warning', 'Obstacle ahead');
+        if (now - lastSafetyAnnouncement > 3500) {
+          speak('Obstacle ahead. Move slightly ' + direction + '.', 'safety');
+          lastSafetyAnnouncement = now;
         }
       }
-    }, 650);
-  }
+    } else {
+      setSafety('clear');
+    }
 
-  function normalizeText(text) {
-    return (text || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    if (searchMode === 'object' && objectTarget) {
+      if (target) {
+        const pos = horizontal(target.bbox, w);
+        if (!objectVisible || now - lastObjectAnnouncement > 5000) {
+          speak(capitalize(objectTarget) + ' spotted, ' + (pos === 'center' ? 'straight ahead' : 'to your ' + pos) + '.', 'sign');
+          lastObjectAnnouncement = now;
+        }
+        objectVisible = true;
+      } else {
+        objectVisible = false;
+      }
+    }
   }
 
   function destinationMatches(text) {
-    const wanted = normalizeText(destination);
-    const seen = normalizeText(text);
+    const wanted = normalize(destination);
+    const seen = normalize(text);
     if (!wanted || !seen) return false;
     if (seen.includes(wanted)) return true;
-
-    // Allow a multi-word destination to survive small OCR errors such as
-    // punctuation/newlines while avoiding substring-only false positives.
-    const wantedWords = wanted.split(' ').filter(Boolean);
+    const wantedWords = wanted.split(' ');
     const seenWords = new Set(seen.split(' '));
-    const matches = wantedWords.filter(word => seenWords.has(word)).length;
-    return wantedWords.length > 1 && matches / wantedWords.length >= 0.7;
+    const hits = wantedWords.filter(w => seenWords.has(w)).length;
+    return wantedWords.length > 1 && hits / wantedWords.length >= 0.7;
   }
 
-  async function scanForSign() {
-    if (signScanBusy || !video.videoWidth || !destination || searchMode !== 'sign' || !appStarted) return;
-    signScanBusy = true;
-
+  async function scanSign() {
+    if (signBusy || searchMode !== 'sign' || !destination || !appStarted || !video.videoWidth || !window.Tesseract) return;
+    signBusy = true;
     const canvas = document.createElement('canvas');
-    // Downscale OCR input for much faster mobile processing.
     const scale = Math.min(1, 960 / video.videoWidth);
-    canvas.width = Math.round(video.videoWidth * scale);
-    canvas.height = Math.round(video.videoHeight * scale);
-    const c = canvas.getContext('2d', { willReadFrequently: true });
-    c.drawImage(video, 0, 0, canvas.width, canvas.height);
-
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0, canvas.width, canvas.height);
     try {
-      const result = await Tesseract.recognize(canvas, 'eng', {
-        logger: () => {}
-      });
+      const result = await Tesseract.recognize(canvas, 'eng', { logger: () => {} });
       const text = result?.data?.text || '';
-      const normalized = normalizeText(text);
-
-      if (destinationMatches(text)) {
-        const words = Array.isArray(result?.data?.words) ? result.data.words : [];
-        const wantedWords = normalizeText(destination).split(' ').filter(Boolean);
-        const matchingWords = words.filter(w => {
-          const word = normalizeText(w.text);
-          return wantedWords.some(target => word === target || word.includes(target) || target.includes(word));
-        });
-
-        let position = 'center';
-        if (matchingWords.length) {
-          const minX = Math.min(...matchingWords.map(w => w.bbox.x0));
-          const maxX = Math.max(...matchingWords.map(w => w.bbox.x1));
-          position = getHorizontalPosition([minX, 0, maxX - minX, 1], canvas.width);
-        }
-
-        // Require repeated/changed evidence before announcing the same sign.
-        const now = Date.now();
-        const evidenceKey = normalized.slice(0, 180);
-        const changedEvidence = evidenceKey !== lastSignText;
-        if (changedEvidence || now - lastSignSpokenAt > 6500) {
-          const phrase = position === 'center'
-            ? capitalize(destination) + ' sign ahead.'
-            : capitalize(destination) + ' sign is to your ' + position + '.';
-          speak(phrase, 'sign');
-          lastSignText = evidenceKey;
-          lastSignSpokenAt = now;
-        }
+      if (!destinationMatches(text)) return;
+      const words = Array.isArray(result?.data?.words) ? result.data.words : [];
+      const wanted = normalize(destination).split(' ');
+      const matched = words.filter(w => wanted.some(t => normalize(w.text) === t));
+      let pos = 'center';
+      if (matched.length) {
+        const minX = Math.min(...matched.map(w => w.bbox.x0));
+        const maxX = Math.max(...matched.map(w => w.bbox.x1));
+        pos = horizontal([minX, 0, Math.max(1, maxX - minX), 1], canvas.width);
+      }
+      const evidence = normalize(text).slice(0, 180);
+      const now = Date.now();
+      if (evidence !== lastSignEvidence || now - lastSignAnnouncement > 6500) {
+        speak(pos === 'center' ? capitalize(destination) + ' sign ahead.' : capitalize(destination) + ' sign is to your ' + pos + '.', 'sign');
+        lastSignEvidence = evidence;
+        lastSignAnnouncement = now;
       }
     } catch (e) {
       log('Sign scan retry: ' + (e.message || 'OCR error'), 'system');
     } finally {
-      signScanBusy = false;
+      signBusy = false;
     }
   }
 
@@ -443,126 +356,139 @@
     destination = dest;
     searchMode = 'sign';
     objectTarget = null;
-    lastSignText = '';
-    lastSignSpokenAt = 0;
-    if (signScanLoopId) clearInterval(signScanLoopId);
-    scanForSign();
-    signScanLoopId = setInterval(scanForSign, 3500);
+    objectVisible = false;
+    lastSignEvidence = '';
+    lastSignAnnouncement = 0;
+    clearInterval(ocrTimer);
+    scanSign();
+    ocrTimer = setInterval(scanSign, 4000);
   }
 
   function startObjectSearch(cls) {
     objectTarget = cls;
     searchMode = 'object';
-    objectWasVisible = false;
-    lastObjectAnnounceAt = 0;
     destination = '';
-    if (signScanLoopId) {
-      clearInterval(signScanLoopId);
-      signScanLoopId = null;
-    }
+    objectVisible = false;
+    lastObjectAnnouncement = 0;
+    clearInterval(ocrTimer);
+    ocrTimer = null;
   }
 
   function stopRecognition() {
     if (recognition && recognitionActive) {
-      try { recognition.stop(); } catch (e) {}
+      try { recognition.stop(); } catch {}
     }
     recognitionActive = false;
-    setListenState('idle');
+    setListen('idle');
   }
 
-  function startRecognition(isManual) {
+  function scheduleBackgroundListening(delay = 700) {
+    clearTimeout(backgroundTimer);
+    if (!appStarted || !hasRecognition || speaking) return;
+    backgroundTimer = setTimeout(() => {
+      if (appStarted && !speaking && !recognitionActive) startRecognition(false);
+    }, delay);
+  }
+
+  function startRecognition(manual = false) {
     if (!recognition || recognitionActive || speaking || !appStarted) return;
+    recognition._manual = manual;
     try {
       recognition.start();
       recognitionActive = true;
-      recognition._manual = !!isManual;
-      setListenState('listening');
-    } catch (e) {
-      recognitionActive = false;
-    }
+      setListen('listening');
+    } catch {}
   }
 
-  function initRecognition() {
-    if (!hasSpeechRecognition) return;
-    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new Ctor();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognition.continuous = false;
-
-    recognition.onresult = (e) => {
-      const heard = (e.results?.[0]?.[0]?.transcript || '').trim();
-      recognitionActive = false;
-      setListenState('thinking');
-      if (heard) {
-        log('Heard: "' + heard + '"', 'system');
-        handleVoiceInput(heard);
-      } else {
-        setListenState('idle');
-      }
-    };
-
-    recognition.onerror = (e) => {
-      const manual = !!recognition._manual;
-      recognitionActive = false;
-      setListenState('idle');
-      if (manual && e.error === 'no-speech') {
-        speak('I did not catch that. Please try again.', 'system');
-      } else if (manual && e.error === 'not-allowed') {
-        speak('Microphone access is blocked. Please allow it and try again.', 'system');
-      }
-    };
-
-    recognition.onend = () => {
-      recognitionActive = false;
-      setListenState('idle');
-
-      // Re-listen only after the browser finishes the current recognition
-      // session. This is more reliable than calling start() from a timer while
-      // Chrome is still closing the previous session.
-      if (appStarted && !speaking) {
-        clearTimeout(backgroundRestartTimer);
-        backgroundRestartTimer = setTimeout(() => startRecognition(false), 700);
-      }
-    };
+  function extractQuery(heard) {
+    let q = normalize(heard);
+    q = q.replace(/^(find|go to|take me to|navigate to|where is|where s|i want to go to|i need to find|look for)\s+/, '');
+    q = q.replace(/^(the|a|an)\s+/, '');
+    return q.trim();
   }
 
-  function extractQuery(phrase) {
-    let p = normalizeText(phrase);
-    p = p.replace(/^(find|go to|take me to|navigate to|where is|where s|i want to go to|i need to find|look for)\s+/, '');
-    p = p.replace(/^(the|a|an)\s+/, '');
-    return p.trim();
-  }
-
-  function handleVoiceInput(heard) {
+  function handleVoice(heard) {
     const q = extractQuery(heard);
     if (!q) {
-      speak('Sorry, I did not catch a destination. Try again.', 'system');
+      speak('I did not catch a destination. Please try again.', 'system');
       return;
     }
-
-    const objClass = matchObjectClass(q);
-    if (objClass) {
-      startObjectSearch(objClass);
-      speak('Looking for the ' + objClass + '. I will tell you where I see it.', 'navigation');
+    const obj = matchObject(q);
+    if (obj) {
+      startObjectSearch(obj);
+      speak('Looking for the ' + obj + '.', 'navigation');
     } else {
       startSignSearch(q);
       speak('Looking for a sign that says ' + capitalize(q) + '.', 'navigation');
     }
   }
 
-  function askForDestination() {
+  function initRecognition() {
+    if (!hasRecognition) return;
+    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new Ctor();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      recognitionActive = false;
+      setListen('thinking');
+      const heard = (event.results?.[0]?.[0]?.transcript || '').trim();
+      if (heard) {
+        log('Heard: "' + heard + '"', 'system');
+        handleVoice(heard);
+      } else {
+        scheduleBackgroundListening(300);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      const manual = !!recognition._manual;
+      recognitionActive = false;
+      setListen('idle');
+      if (manual && event.error === 'not-allowed') {
+        speak('Microphone access is blocked. Allow microphone access and try again.', 'system');
+      } else if (manual && event.error === 'no-speech') {
+        speak('I did not hear you. Please try again.', 'system');
+      }
+    };
+
+    recognition.onend = () => {
+      recognitionActive = false;
+      setListen('idle');
+      // Always restart after the current speech finishes. This fixes the main
+      // failure where MySight stopped listening after the first destination.
+      scheduleBackgroundListening(700);
+    };
+  }
+
+  function askDestination() {
     speak('Where do you want to go, or what are you looking for?', 'system', () => {
       startRecognition(true);
     });
   }
 
+  function createTextFallback() {
+    if (document.getElementById('destinationFallback')) return;
+    const box = document.createElement('div');
+    box.id = 'destinationFallback';
+    box.style.cssText = 'position:absolute;left:16px;right:16px;bottom:82px;z-index:20;display:flex;gap:8px;max-width:560px;margin:auto;';
+    box.innerHTML = '<input id="destinationInput" aria-label="Destination" placeholder="Type destination (voice unavailable)" style="flex:1;padding:14px 16px;border-radius:14px;border:1px solid #555;background:#111;color:#fff;font-size:16px"><button id="destinationGo" style="padding:14px 18px;border:0;border-radius:14px;font-weight:700;cursor:pointer">Go</button>';
+    cameraWrap.appendChild(box);
+    $('destinationGo').onclick = () => {
+      const q = normalize($('destinationInput').value);
+      if (!q) return;
+      const obj = matchObject(q);
+      if (obj) { startObjectSearch(obj); speak('Looking for the ' + obj + '.', 'navigation'); }
+      else { startSignSearch(q); speak('Looking for a sign that says ' + capitalize(q) + '.', 'navigation'); }
+    };
+  }
+
   speakBtn.addEventListener('click', () => {
-    if (recognitionActive) {
-      stopRecognition();
-      return;
-    }
+    if (!hasRecognition) return;
+    if (recognitionActive) { stopRecognition(); return; }
     if (speaking) cancelSpeech();
     startRecognition(true);
   });
@@ -572,24 +498,31 @@
 
   startBtn.addEventListener('click', async () => {
     if (appStarted) return;
-    appStarted = true;
-    primeSpeech();
-    startScreen.style.display = 'none';
-    mainScreen.classList.add('active');
-
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting…';
     try {
-      await startCamera();
+      await openCamera();
+      appStarted = true;
+      prepareSpeech();
+      startScreen.style.display = 'none';
+      mainScreen.classList.add('active');
+      log('Camera ready. Loading on-device AI…', 'system');
+      loadModel().then(() => {
+        detectionTimer = setInterval(detect, 650);
+        detect();
+      }).catch(e => log('AI model unavailable: ' + e.message, 'system'));
+      if (hasRecognition) {
+        initRecognition();
+        askDestination();
+      } else {
+        createTextFallback();
+        speak('Voice input is not supported in this browser. You can type a destination below.', 'system');
+      }
     } catch (e) {
-      log('Camera access failed: ' + (e.message || 'permission denied'), 'system');
-      speak('I could not access the camera. Please allow camera access and reload the page.', 'system');
-      return;
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start';
+      log('Startup failed: ' + (e.message || 'permission denied'), 'system');
+      alert('MySight could not start. Use Chrome on HTTPS or localhost and allow camera access.');
     }
-
-    initRecognition();
-    if (!hasSpeechRecognition) {
-      speak('Voice input is not supported in this browser. Please use Chrome on Android or desktop Chrome.', 'system');
-      return;
-    }
-    askForDestination();
   });
 })();
