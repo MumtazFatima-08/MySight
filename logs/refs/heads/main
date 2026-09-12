@@ -1,2 +1,0 @@
-0000000000000000000000000000000000000000 b0d020c99180e9aa82af1c7480f1dbc78f9c0e1a MySight Team <team@mysight.local> 1789247975 +0000	commit (initial): Restructure into multi-file project; add diagnostics page and object detection
-b0d020c99180e9aa82af1c7480f1dbc78f9c0e1a b0d020c99180e9aa82af1c7480f1dbc78f9c0e1a root <root@vm.(none)> 1789247975 +0000	Branch: renamed refs/heads/master to refs/heads/main
