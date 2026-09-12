@@ -1,93 +1,89 @@
 # MySight
 
-Voice-first indoor wayfinding for blind and low-vision users — built for
-BuildForge Hackathon 2026.
+Voice-first indoor wayfinding for blind and low-vision users — built for BuildForge Hackathon 2026.
 
-## Project structure
+## What problem does it solve?
 
-```
-index.html            Entry point — markup only
-css/style.css         All styling
-js/app.js             All application logic (camera, detection, voice)
-diagnostics.html       Standalone page to test each browser capability separately
-README.md
-```
+The difficult part is often the **last few metres**: reaching the correct room, counter, or facility inside a hospital, government office, or college campus.
 
-No build step, no dependencies to install. It's a static site — open
-`index.html` (served over HTTPS or localhost) and it runs.
+MySight turns a phone camera into a lightweight, voice-guided wayfinding assistant. The user speaks a destination or object; MySight uses on-device vision and OCR to provide relative guidance and safety warnings.
 
-## Problem
+## Core flow
 
-Blind and low-vision users can reach the right building but still struggle
-with the last few metres: finding the correct room, counter, or facility
-inside hospitals, government offices, and college campuses.
+1. Tap **Start** and grant camera/microphone permissions.
+2. MySight asks: *"Where do you want to go, or what are you looking for?"*
+3. Speak a target.
+4. The target is routed automatically:
+   - **Object mode:** targets that belong to the COCO-SSD 80-class vocabulary (for example chair, laptop, bottle, book, clock) are located with on-device object detection.
+   - **Sign mode:** other destinations are searched for as printed text using Tesseract.js OCR.
+5. A separate safety loop continuously checks the camera view for supported hazards. Safety messages have higher speech priority than normal navigation narration.
+6. When the browser permits background speech recognition, the app attempts to restart listening after each completed recognition/speech cycle.
 
-Because the target user cannot operate a touchscreen UI to type a
-destination, **the entire interaction is voice-in, voice-out.** The only
-touch input in the whole app is a single large button to start.
+## Navigation logic
 
-## How it works
+MySight intentionally reports **relative direction**, not fake centimetre-level distance.
 
-1. Tap **Start**. This requests camera and microphone permission.
-2. MySight asks out loud: *"Where do you want to go, or what are you looking
-   for?"*
-3. Say a destination. Two paths, decided automatically:
-   - If it matches one of the 80 object classes the vision model knows
-     (chair, tv, laptop, cup, bottle, remote, book, clock, etc.) → MySight
-     watches for that **object** and announces its direction when spotted.
-   - Otherwise → MySight treats it as a **sign** and reads text in the frame
-     with OCR, watching for that word.
-4. A safety loop runs continuously and independently, interrupting with
-   "Obstacle ahead, move slightly left/right" whenever something is close
-   and in the lower-center of the frame — this always takes priority over
-   normal narration.
-5. It keeps listening quietly in the background afterward — no need to tap
-   the mic again for a follow-up question.
+- Object detections are classified as left, centre, or right from the camera frame.
+- OCR matches the requested destination against detected text and uses the matched word bounding box to estimate left/centre/right position.
+- Safety guidance checks the left and right camera regions before recommending a side. If both sides appear blocked, it tells the user to stop rather than blindly choosing an opposite direction.
+- Repeated sign/object announcements are throttled so the same detection does not continuously talk over the user.
 
-Guidance is deliberately imprecise by design: "move slightly left," never a
-fabricated centimetre measurement.
+These are camera-space heuristics, not a replacement for a certified mobility aid, depth sensor, or professional navigation system.
 
 ## Implementation
 
-- **Obstacle + object detection**: TensorFlow.js + COCO-SSD, on-device.
-- **Sign reading**: Tesseract.js OCR on captured frames.
-- **Voice in**: Web Speech API `SpeechRecognition`.
-- **Voice out**: Web Speech API `SpeechSynthesisUtterance`, with a warm-up
-  utterance fired synchronously on the start tap (Android Chrome silently
-  drops `speak()` calls that aren't tightly coupled to a user gesture or
-  called before the voice list has loaded).
-- No backend, no API keys.
+- **Object + obstacle detection:** TensorFlow.js + COCO-SSD (`lite_mobilenet_v2`), running in the browser.
+- **Sign reading:** Tesseract.js OCR on downscaled camera frames.
+- **Voice input:** Web Speech API `SpeechRecognition`.
+- **Voice output:** Web Speech API `SpeechSynthesisUtterance` with speech prioritisation and a start-tap warm-up.
+- **Frontend:** HTML, CSS, vanilla JavaScript.
+- **Backend:** none.
+- **API keys:** none.
 
-## Known browser constraints (not bugs — platform limits)
+## Project structure
 
-- **HTTPS or localhost required.** Camera and mic are blocked entirely on
-  plain `file://` pages. Use GitHub Pages, or a local server
-  (`python3 -m http.server`).
-- **Voice input needs Chrome.** `SpeechRecognition` has little to no support
-  in Safari on iOS. Use Chrome on Android for the most reliable results.
-- **Object detection only knows 80 categories** (COCO dataset). Common misses
-  like "door," "wall," or "window" are outside that list — no code fix makes
-  those detectable with this model. Full list is in `js/app.js`.
+```text
+index.html          Main application
+css/style.css       UI styling
+js/app.js           Camera, vision, OCR and voice logic
+diagnostics.html    Browser capability diagnostics
+README.md           Documentation
+```
 
-## If something isn't working: run diagnostics first
+No build step is required. Serve the project over **HTTPS or localhost**.
 
-Open `diagnostics.html` on the same device before assuming the app is
-broken. It tests, one at a time: secure context, camera permission,
-microphone permission, speech recognition support, a live recognition
-sample, text-to-speech playback, and both AI models loading — each with a
-pass/fail and the exact error message. Copy the results with the button at
-the bottom.
+## Browser constraints
+
+- Camera and microphone require a secure context: **HTTPS or localhost**. `file://` is not sufficient.
+- `SpeechRecognition` support varies by browser. Chrome is the recommended demo browser.
+- COCO-SSD only knows its 80 trained categories. Things such as doors, walls, windows, rooms, and signs are not object classes; they are handled through the OCR path when they contain readable text.
+- OCR accuracy depends on lighting, camera quality, text size, angle, and motion.
+- Browser speech recognition can stop or behave differently across devices, so the app includes restart logic and a diagnostics page rather than assuming continuous recognition is guaranteed.
 
 ## Demo script
 
-1. Tap Start → "Where do you want to go?"
-2. Say "Find the chair" → object mode → "Chair spotted, ahead, close by."
-3. Say "Find Pharmacy" (with a printed sign in view) → sign mode → "Pharmacy
-   ahead."
-4. Walk toward an obstacle → safety interrupt fires automatically,
-   pre-empting any other narration.
+### Demo 1 — object target
 
-## Tech stack
+Say **"Find the chair"**.
 
-HTML, CSS, vanilla JavaScript, TensorFlow.js, COCO-SSD, Tesseract.js, Web
-Speech API.
+Expected behavior: MySight enters object mode and reports the chair's relative position, for example *"Chair spotted, to your left."*
+
+### Demo 2 — sign target
+
+Hold a clear printed **Pharmacy** sign in front of the camera and say **"Find Pharmacy"**.
+
+Expected behavior: MySight enters sign mode, detects the requested word with OCR, and reports whether the sign is left, centre, or right in the camera view.
+
+### Demo 3 — safety interrupt
+
+Place a supported obstacle such as a chair in the lower camera path while navigation narration is active.
+
+Expected behavior: the safety message takes priority and either recommends the clearer side or says the path appears blocked.
+
+## Diagnostics
+
+Open `diagnostics.html` if the main app does not behave as expected. It checks secure-context status, camera/microphone access, speech recognition, text-to-speech, and model loading separately.
+
+## Safety note
+
+MySight is a hackathon prototype intended to demonstrate accessible, voice-first indoor wayfinding. It should **not** be treated as a certified mobility aid or relied on as the sole system for safe travel.
