@@ -233,19 +233,56 @@
     speakBtn.classList.toggle('listening', state === 'listening');
   }
 
-  function speak(text, kind, onDone){
+  let voicesReady = false;
+  function primeSpeech(){
+    // Must run synchronously inside the click handler to unlock speechSynthesis
+    // on Android Chrome, and to force voice list loading before first real speak.
+    if (!hasSpeechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const warm = new SpeechSynthesisUtterance(' ');
+    warm.volume = 0;
+    window.speechSynthesis.speak(warm);
+    if (window.speechSynthesis.getVoices().length) {
+      voicesReady = true;
+    } else {
+      window.speechSynthesis.onvoiceschanged = () => { voicesReady = true; };
+      setTimeout(() => { voicesReady = true; }, 1200);
+    }
+    // Chrome/Android sometimes silently halts speech after ~15s; nudge it awake periodically.
+    setInterval(() => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }
+    }, 8000);
+  }
+
+  function speak(text, kind, onDone, attempt){
     log(text, kind);
     if (!hasSpeechSynthesis) { if (onDone) onDone(); return; }
+    if (!voicesReady && (attempt || 0) < 10) {
+      setTimeout(() => speak(text, kind, onDone, (attempt || 0) + 1), 150);
+      return;
+    }
     // pause recognition while speaking so the app doesn't hear itself
     stopRecognition();
     speaking = true;
+    window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.rate = 1.02;
-    utter.onend = utter.onerror = () => {
+    utter.volume = 1;
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
       speaking = false;
       if (onDone) onDone();
     };
-    if (kind === 'safety') window.speechSynthesis.cancel();
+    utter.onend = finish;
+    utter.onerror = finish;
+    // Safety net: Android Chrome occasionally never fires onend/onerror.
+    const estMs = Math.max(1500, text.length * 90);
+    setTimeout(finish, estMs + 2000);
     window.speechSynthesis.speak(utter);
   }
 
@@ -272,12 +309,14 @@
     resizeOverlay();
     window.addEventListener('resize', resizeOverlay);
 
-    try {
-      model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-    } catch (e) {
+    // Load the obstacle model in the background so voice prompts aren't
+    // blocked on a multi-second download over a phone network.
+    cocoSsd.load({ base: 'lite_mobilenet_v2' }).then(m => {
+      model = m;
+      startObstacleLoop();
+    }).catch(e => {
       log('Obstacle model failed to load: ' + e.message, 'system');
-    }
-    startObstacleLoop();
+    });
   }
 
   function resizeOverlay(){
@@ -429,6 +468,7 @@
   closeTranscriptBtn.addEventListener('click', () => transcriptPanel.classList.remove('open'));
 
   startBtn.addEventListener('click', async () => {
+    primeSpeech(); // must be the very first thing, still inside the tap gesture
     startScreen.style.display = 'none';
     mainScreen.classList.add('active');
     try {
