@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>MySight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+
+  <div id="startScreen">
+    <h1>MySight</h1>
+    <p>Tap the button, then just talk. MySight will ask where you want to go and guide you there by voice.</p>
+    <button id="startBtn" aria-label="Start MySight">Start</button>
+    <div class="hint">One tap. Camera and microphone permission will be requested.</div>
+    <a href="diagnostics.html" style="color:#8b92a0; font-size:12px;">Having trouble? Run diagnostics</a>
+  </div>
+
+  <div id="mainScreen">
+    <div class="camera-wrap" id="cameraWrap">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas class="overlay" id="overlay"></canvas>
+
+      <div class="top-bar">
+        <span class="pill safe" id="safetyPill"><span class="dot"></span><span>Path clear</span></span>
+        <span class="pill" id="listenPill"><span class="dot"></span><span>Idle</span></span>
+      </div>
+
+      <button class="transcript-toggle" id="transcriptToggleBtn">Transcript</button>
+      <button class="speak-btn" id="speakBtn" aria-label="Speak a destination">🎙</button>
+
+      <div class="caption-bar">
+        <div class="current" id="currentCaption">Say "Start" was tapped. Getting ready…</div>
+      </div>
+
+      <div id="transcriptPanel">
+        <button class="close-transcript" id="closeTranscriptBtn" aria-label="Close transcript">✕</button>
+        <h2>Full transcript</h2>
+        <div id="logList"></div>
+      </div>
+    </div>
+  </div>
+
+  <div aria-live="polite" class="visually-hidden" id="ariaLive"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+
+<script src="js/app.js"></script>
+</body>
+</html>
