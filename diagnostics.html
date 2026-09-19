@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MySight Diagnostics</title>
+<style>
+  body { font-family: -apple-system, Inter, sans-serif; background:#14171c; color:#ecebe4; margin:0; padding:20px; }
+  h1 { font-size:20px; }
+  .test { background:#1c2029; border:1px solid #2c313d; border-radius:10px; padding:14px; margin-bottom:12px; }
+  .test h2 { font-size:15px; margin:0 0 6px; }
+  .status { font-weight:600; font-size:13px; padding:3px 8px; border-radius:6px; display:inline-block; margin-bottom:8px; }
+  .status.pending { background:#3a3f4a; color:#c8ccd6; }
+  .status.pass { background:#1c3835; color:#4fd1c5; }
+  .status.fail { background:#3a2020; color:#ff5a5f; }
+  .detail { font-size:13px; color:#8b92a0; white-space:pre-wrap; word-break:break-word; margin-top:4px; }
+  button { background:#ffb13d; border:none; color:#1a1300; font-weight:700; padding:10px 14px; border-radius:8px; font-size:14px; margin-right:8px; margin-top:6px; }
+  #transcriptBox { min-height: 24px; background:#12151a; border-radius:6px; padding:8px; margin-top:6px; font-size:14px; }
+  .copyBtn { background:#232833; color:#ecebe4; }
+</style>
+</head>
+<body>
+<h1>MySight Diagnostics</h1>
+<p style="color:#8b92a0; font-size:13px;">Run each test in order. Screenshot or copy the results at the bottom and send them back.</p>
+
+<div class="test">
+  <h2>1. Secure context (needed for camera/mic at all)</h2>
+  <div class="status pending" id="s1">checking…</div>
+  <div class="detail" id="d1"></div>
+</div>
+
+<div class="test">
+  <h2>2. Camera access</h2>
+  <div class="status pending" id="s2">not tested</div>
+  <button onclick="testCamera()">Test camera</button>
+  <video id="camPreview" autoplay playsinline muted style="width:100%;max-width:300px;border-radius:8px;margin-top:8px;display:none;"></video>
+  <div class="detail" id="d2"></div>
+</div>
+
+<div class="test">
+  <h2>3. Microphone access</h2>
+  <div class="status pending" id="s3">not tested</div>
+  <button onclick="testMic()">Test microphone</button>
+  <div class="detail" id="d3"></div>
+</div>
+
+<div class="test">
+  <h2>4. Speech recognition support</h2>
+  <div class="status pending" id="s4">checking…</div>
+  <div class="detail" id="d4"></div>
+</div>
+
+<div class="test">
+  <h2>5. Live speech recognition (say something after tapping)</h2>
+  <div class="status pending" id="s5">not tested</div>
+  <button onclick="testRecognition()">Start listening (5s)</button>
+  <div id="transcriptBox">…</div>
+  <div class="detail" id="d5"></div>
+</div>
+
+<div class="test">
+  <h2>6. Text-to-speech</h2>
+  <div class="status pending" id="s6">not tested</div>
+  <button onclick="testTTS()">Play test voice</button>
+  <div class="detail" id="d6"></div>
+</div>
+
+<div class="test">
+  <h2>7. Object detection model (TensorFlow.js + COCO-SSD)</h2>
+  <div class="status pending" id="s7">loading…</div>
+  <div class="detail" id="d7"></div>
+</div>
+
+<div class="test">
+  <h2>8. OCR model (Tesseract.js)</h2>
+  <div class="status pending" id="s8">loading…</div>
+  <div class="detail" id="d8"></div>
+</div>
+
+<button class="copyBtn" onclick="copyResults()">Copy all results as text</button>
+<div class="detail" id="finalResults" style="margin-top:10px;"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+<script>
+function setStatus(id, state, text){
+  const el = document.getElementById(id);
+  el.className = 'status ' + state;
+  el.textContent = text;
+}
+function setDetail(id, text){ document.getElementById(id).textContent = text; }
+
+// Test 1
+if (window.isSecureContext) {
+  setStatus('s1','pass','SECURE'); setDetail('d1', 'Protocol: ' + location.protocol + ' — camera/mic are allowed to work here.');
+} else {
+  setStatus('s1','fail','NOT SECURE'); setDetail('d1', 'Protocol: ' + location.protocol + ' — camera/mic will be BLOCKED. You must use https:// or localhost.');
+}
+
+// Test 2
+async function testCamera(){
+  setStatus('s2','pending','testing…');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    const v = document.getElementById('camPreview');
+    v.srcObject = stream; v.style.display = 'block';
+    setStatus('s2','pass','PASS'); setDetail('d2','Camera stream received.');
+  } catch (e) {
+    setStatus('s2','fail','FAIL'); setDetail('d2', e.name + ': ' + e.message);
+  }
+}
+
+// Test 3
+async function testMic(){
+  setStatus('s3','pending','testing…');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => t.stop());
+    setStatus('s3','pass','PASS'); setDetail('d3','Microphone permission granted.');
+  } catch (e) {
+    setStatus('s3','fail','FAIL'); setDetail('d3', e.name + ': ' + e.message);
+  }
+}
+
+// Test 4
+const hasSR = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+if (hasSR) {
+  setStatus('s4','pass','SUPPORTED'); setDetail('d4', 'This browser exposes a SpeechRecognition API.');
+} else {
+  setStatus('s4','fail','NOT SUPPORTED'); setDetail('d4', 'This browser has no SpeechRecognition API at all. Voice input cannot work here regardless of code — try Chrome on Android.');
+}
+
+// Test 5
+function testRecognition(){
+  if (!hasSR) { setStatus('s5','fail','FAIL'); setDetail('d5','No SpeechRecognition API in this browser.'); return; }
+  setStatus('s5','pending','listening…');
+  document.getElementById('transcriptBox').textContent = '…';
+  const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const rec = new Ctor();
+  rec.lang = 'en-US';
+  rec.interimResults = true;
+  rec.maxAlternatives = 1;
+  let gotResult = false;
+  rec.onresult = (e) => {
+    gotResult = true;
+    const text = e.results[0][0].transcript;
+    document.getElementById('transcriptBox').textContent = text;
+    setStatus('s5','pass','PASS'); setDetail('d5', 'Heard: "' + text + '"');
+  };
+  rec.onerror = (e) => {
+    setStatus('s5','fail','FAIL'); setDetail('d5', 'Error: ' + e.error);
+  };
+  rec.onend = () => {
+    if (!gotResult) { setStatus('s5','fail','NO SPEECH DETECTED'); setDetail('d5','Recognition ended with no result — mic may not be picking up sound, or permission was denied silently.'); }
+  };
+  try { rec.start(); } catch(e){ setStatus('s5','fail','FAIL'); setDetail('d5', e.message); }
+}
+
+// Test 6
+function testTTS(){
+  setStatus('s6','pending','playing…');
+  if (!('speechSynthesis' in window)) {
+    setStatus('s6','fail','NOT SUPPORTED'); setDetail('d6','No speechSynthesis API in this browser.'); return;
+  }
+  const u = new SpeechSynthesisUtterance('Testing one two three. If you can hear this, text to speech works.');
+  let fired = false;
+  u.onend = () => { fired = true; setStatus('s6','pass','FINISHED — did you HEAR it?'); setDetail('d6','If you heard the voice, tap nothing else — this is a pass. If you saw this text but heard NOTHING, that is the actual bug: speechSynthesis fired an end event but produced no audio (common Android Chrome issue, often fixed by checking media volume / silent mode / a second tap).'); };
+  u.onerror = (e) => { setStatus('s6','fail','ERROR'); setDetail('d6', e.error); };
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(u);
+  setTimeout(() => { if (!fired) { setStatus('s6','fail','TIMED OUT'); setDetail('d6','speechSynthesis.speak() was called but never fired onend — it is likely stuck/silently failing on this device.'); } }, 6000);
+}
+
+// Test 7
+cocoSsd.load({ base: 'lite_mobilenet_v2' }).then(() => {
+  setStatus('s7','pass','LOADED'); setDetail('d7','Object detection model loaded successfully.');
+}).catch(e => {
+  setStatus('s7','fail','FAILED TO LOAD'); setDetail('d7', e.message + ' — likely blocked network/CDN or no internet.');
+});
+
+// Test 8
+Tesseract.recognize(
+  'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><rect width="200" height="60" fill="white"/><text x="10" y="40" font-size="30">TEST</text></svg>'),
+  'eng'
+).then(r => {
+  setStatus('s8','pass','LOADED'); setDetail('d8','OCR ran successfully. Read back: "' + (r.data.text||'').trim() + '"');
+}).catch(e => {
+  setStatus('s8','fail','FAILED'); setDetail('d8', e.message + ' — likely blocked network/CDN or no internet.');
+});
+
+function copyResults(){
+  const ids = [1,2,3,4,5,6,7,8];
+  let out = 'MySight Diagnostics — ' + new Date().toString() + '\n';
+  out += 'User agent: ' + navigator.userAgent + '\n\n';
+  ids.forEach(i => {
+    out += i + '. ' + document.getElementById('s'+i).textContent + ' — ' + document.getElementById('d'+i).textContent + '\n';
+  });
+  document.getElementById('finalResults').textContent = out;
+  if (navigator.clipboard) navigator.clipboard.writeText(out).catch(()=>{});
+}
+</script>
+</body>
+</html>
